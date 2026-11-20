@@ -1,7 +1,7 @@
 # SOP：富文本 HTML 转干净 Markdown（微信公众号 / 另存网页）
 
 > 适用范围：把"另存为网页"得到的富文本页面（典型是 `mp.weixin.qq.com` 文章页）整篇转成可读、可归档的 Markdown，要求**文字不丢、格式不脏、图片不失**。
-> 两条分支：**A 图文页**（正文在 `#js_content` 里）走 `html_to_md.py`；**B 图片型图文消息**（正文是 N 张长图，靠 JS 注入）走 `wechat_picture_page.py`。
+> 四条分支：**A 图文页**（正文在 `#js_content` 里）走 `html_to_md.py`；**B 图片型图文消息**（正文是 N 张长图，靠 JS 注入）走 `wechat_picture_page.py`；**C 版式固定的重噪声单页**（白名单 class + 多形态兜底）走 `convert.py`；**D 整棵目录批量**走 `html2md_batch.ps1`（pandoc）。
 > 已验证案例：一篇 400 KB 的静态技术长文（分支 A）；一篇「17 张图讲透 XX」的长图合集（分支 B）。
 > 核心原则：先判断分支再动手；能机械化的交给脚本，结构性缺陷与图内文字人工复核。
 
@@ -38,6 +38,8 @@ python 脚本/md_verify.py "标题.md"
 ```
 
 产出默认落在源文件同目录同名 `.md`；要覆盖已有文件必须加 `--overwrite`。归档位置就是你的笔记库目录，文件名用文章标题。
+
+不是公众号页面时怎么选：**单页、版式固定、噪声极多、要可复现** → 分支 C（`convert.py`）；**整棵目录几十上百个 html、只要覆盖率** → 分支 D（`html2md_batch.ps1`）。
 
 ---
 
@@ -86,6 +88,28 @@ python 脚本/md_verify.py "标题.md"
 | `--overwrite` / `--dry-run` | 覆盖 / 只解析不写文件 | 关 |
 
 产出三件：`标题.md` 骨架、`assets/标题/01..NN.jpg`、`标题.manifest.json`（每张卡的 url/尺寸/本地路径，供转录时核对）。
+
+### 2.3 分支 C：`convert.py`（白名单优先 + 多形态兜底）
+
+适用：单页、站点版式固定、噪声极多（SSR payload、导航、二维码、广告），且要求"同一源再跑一次产出等价"。零第三方依赖。
+
+```powershell
+python 脚本/convert.py 页面.html --check      # 只读预检：编码、一致性告警、形态、残留
+python 脚本/convert.py 页面.html              # dry-run：md 打到 stdout，不写盘
+python 脚本/convert.py 页面.html --apply      # 写盘；已存在先备份 .md.bak
+```
+
+形态判定顺序：白名单 class 命中 → 问答（`h1#questionTitle` / `best-answer`）→ 表单（`div.question` ≥ 2）→ 知乎搜索结果页 → 通用文章。`.mht` / `.mhtml` 先解包再解析。细节见 `docs/形态兜底转换器.md`。
+
+### 2.4 分支 D：`html2md_batch.ps1`（pandoc 批量）
+
+适用：整棵目录 / 通配符，一次几十上百个 html，优先覆盖率与速度，不追求版式完美。
+
+```powershell
+.\脚本\html2md_batch.ps1 -Source "docs" -OutDir md_output -Incremental -Log convert.log
+```
+
+输出树镜像源目录，默认跳过构建与缓存目录，有失败文件退出码 1。产物若要归档，仍建议过一遍 `md_verify.py`。细节见 `docs/批量转换-pandoc.md`。
 
 ---
 
@@ -223,5 +247,11 @@ python 脚本/md_verify.py <成品.md> --strict        # exit 0 才算过
 |---|---|
 | `脚本/html_to_md.py` | 分支 A 主脚本 |
 | `脚本/wechat_picture_page.py` | 分支 B 主脚本（渲染 + 取卡 + 下载 + 骨架） |
+| `脚本/convert.py` | 分支 C 主脚本（白名单 class + 多形态兜底） |
+| `脚本/html2md_batch.ps1` | 分支 D 主脚本（pandoc 批量并行 + 增量 + 日志） |
 | `脚本/md_verify.py` | 成品校验：图片可解析、空 alt、空白、围栏、CommonMark 渲染 |
 | `tests/test_pipeline.py` | 回归测试；`WXPIC_FIXTURE` / `HTMLMD_FIXTURE` 指向自有样本时跑真实用例 |
+| `tests/test_convert.py` | 分支 C 的 82 项回归（内联夹具，无需真实语料） |
+| `docs/形态兜底转换器.md` | 分支 C 的设计取舍、形态判据与边界 |
+| `docs/批量转换-pandoc.md` | 分支 D 的参数与镜像规则 |
+| `docs/PITFALLS-形态兜底.md` | 30 条踩坑记录 |
