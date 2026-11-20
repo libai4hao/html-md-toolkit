@@ -499,6 +499,11 @@ class _GenericParser(html.parser.HTMLParser):
                 return 'art_list'
             if tag == 'pre':
                 return 'art_code'
+            # 没有 <pre> 包裹的裸 <code> 块（正文级）：若不收，文字会整块消失。
+            # 段内的行内 <code> 由 art_para 承接，保持为普通文本，不在这里抢。
+            if tag == 'code' and self._code_frame() is None \
+                    and not any(r == 'art_para' for _, r, _ in self.stack):
+                return 'art_code'
         if any(h in joined for h in NOISE_CLASS_HINTS):
             return 'drop'
         return None
@@ -634,15 +639,10 @@ class _GenericParser(html.parser.HTMLParser):
             elif role == 'art_heading' and payload is not None:
                 text = _squash(''.join(payload['text']))
                 if text:
-                    self.heading.append(text)
-                    # 标题去重：与首个 H1 相同的后续标题不再重复成块。
-                    first = self.heading[0]
-                    already = any(
-                        b['type'] == 'heading' and b['text'] == text
-                        for b in self.blocks)
-                    if text == first and already:
-                        pass
-                    else:
+                    # 只记账（层级 + 文本），文档标题另行取首个 H1。
+                    self.heading.append((payload['level'], text))
+                    # 文档标题（首个 H1）只当标题用，不再重复成块；正文里的 H2+ 才进块流。
+                    if payload['level'] > 1:
                         self.blocks.append({'type': 'heading',
                                             'level': payload['level'],
                                             'text': text})
@@ -742,6 +742,20 @@ class _GenericParser(html.parser.HTMLParser):
                 out.append(b)
         return out
 
+    def _doc_title(self):
+        """文档标题：优先首个 H1；没有 H1 时退回第一个标题；都没有则空。
+
+        早期实现把所有标题文本拼成一个字符串，H1 与后续 H2 会粘成
+        「标题甲小节乙」这种假标题，并在块流里把 H1 重复渲染一次。
+        """
+        for level, text in self.heading:
+            if level == 1 and text:
+                return text
+        for _, text in self.heading:
+            if text:
+                return text
+        return ''
+
     def result(self):
         shape = self.shape
         if shape == 'qa':
@@ -755,7 +769,7 @@ class _GenericParser(html.parser.HTMLParser):
                              'subtitle': _squash(''.join(self.form_subtitle)),
                              'fields': self.fields}}
         return {'shape': 'article',
-                'article': {'heading': _squash(''.join(self.heading)),
+                'article': {'heading': self._doc_title(),
                             'paragraphs': [p for p in
                                            (_squash(x) for x in self.paragraphs)
                                            if not _is_article_noise(p)],
@@ -1019,8 +1033,9 @@ def _render_article(data):
                 items = [i for i in (_squash(x) for x in lst.get('items', [])) if i]
                 for idx, item in enumerate(items, 1):
                     marker = ('%d. ' % idx) if ordered else '- '
-                    lines += [marker + item, '']
+                    lines.append(marker + item)
                 if items:
+                    # 条目之间不留空行：留空会变成「松列表」，渲染成一堆 <p>。
                     lines += ['']
             elif t == 'code':
                 code = b.get('text', '').strip('\n')
@@ -1138,15 +1153,41 @@ def _render_any(html, filename, check):
     return render_generic(generic, note), label, data
 
 
-def process_file(path, apply=False, backup=True):
+def _yaml_scalar(value):
+    """YAML 标量：含特殊字符或首尾空白时用双引号包住并转义。"""
+    if re.search(r'[:#\[\]{}&*!|>\'"%@`,]', value) or value.strip() != value:
+        return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+    return value
+
+
+def _frontmatter(md, source_name):
+    """知识库归档用的 YAML 头（title 取成品第一处 H1，source 取源文件名）。"""
+    title = ''
+    for line in md.splitlines():
+        if line.startswith('# '):
+            title = line[2:].strip()
+            break
+    if not title:
+        title = os.path.splitext(source_name)[0]
+    return '\n'.join(['---',
+                      'title: ' + _yaml_scalar(title),
+                      'source: ' + _yaml_scalar(source_name),
+                      '---',
+                      ''])
+
+
+def process_file(path, apply=False, backup=True, frontmatter=False):
     """编排全流程，返回生成的 Markdown 字符串。
 
     默认 dry-run（一字节不写）；apply=True 才写 `<同名>.md`，写前若目标已存在先备份 `.bak`。
+    frontmatter=True 时在成品前面加 YAML 头（知识库归档与 md_verify --strict 需要）。
     """
     html, codec, _ = _load_html(path)
     filename = os.path.basename(path)
     check = consistency_check(filename, html)
     md, _shape, _data = _render_any(html, filename, check)
+    if frontmatter:
+        md = _frontmatter(md, filename) + '\n' + md
     if apply:
         out = os.path.splitext(path)[0] + '.md'
         if backup and os.path.exists(out):
@@ -1188,15 +1229,21 @@ def main(argv=None):
                         help='写出 <同名>.md（写前若已存在先备份为 .md.bak）')
     parser.add_argument('--no-backup', action='store_true',
                         help='与 --apply 同用时不备份（不推荐）')
+    parser.add_argument('--frontmatter', action='store_true',
+                        help='成品前加 YAML 头（title/source），知识库归档时用')
     args = parser.parse_args(argv)
     if args.check and args.apply:
         parser.error('--check 与 --apply 互斥，请只选一个')
+    if args.no_backup and not args.apply:
+        parser.error('--no-backup 只在 --apply 时才有意义')
     if not os.path.isfile(args.path):
         parser.error('文件不存在：%s' % args.path)
     try:
         if args.check:
             return _check_only(args.path)
-        md = process_file(args.path, apply=args.apply, backup=not args.no_backup)
+        md = process_file(args.path, apply=args.apply,
+                          backup=not args.no_backup,
+                          frontmatter=args.frontmatter)
         if args.apply:
             print('已写出：%s' % (os.path.splitext(args.path)[0] + '.md'))
         else:

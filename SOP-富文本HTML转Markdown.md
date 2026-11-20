@@ -97,6 +97,7 @@ python 脚本/md_verify.py "标题.md"
 python 脚本/convert.py 页面.html --check      # 只读预检：编码、一致性告警、形态、残留
 python 脚本/convert.py 页面.html              # dry-run：md 打到 stdout，不写盘
 python 脚本/convert.py 页面.html --apply      # 写盘；已存在先备份 .md.bak
+python 脚本/convert.py 页面.html --apply --frontmatter   # 归档用：补 YAML 头，md_verify --strict 才过
 ```
 
 形态判定顺序：白名单 class 命中 → 问答（`h1#questionTitle` / `best-answer`）→ 表单（`div.question` ≥ 2）→ 知乎搜索结果页 → 通用文章。`.mht` / `.mhtml` 先解包再解析。细节见 `docs/形态兜底转换器.md`。

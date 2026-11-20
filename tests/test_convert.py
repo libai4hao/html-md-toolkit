@@ -837,5 +837,57 @@ class DispatchTest(unittest.TestCase):
         self.assertIn('问题', md)
 
 
+MULTI_HEADING_SAMPLE = (
+    '<html><body><h1>标题甲</h1><p>正文一。</p>'
+    '<h2>小节乙</h2><p>正文二。</p></body></html>'
+)
+
+BARE_CODE_SAMPLE = (
+    '<html><body><h1>代码页</h1>'
+    '<code>print(1)</code><p>尾部。</p></body></html>'
+)
+
+
+class ReviewFixTest(unittest.TestCase):
+    """代码 review 抓到的缺陷回归：标题拼接、裸 code 丢字、列表松紧、frontmatter、参数校验。"""
+
+    def test_doc_title_is_first_h1_not_concatenation(self):
+        data = convert.parse_generic(MULTI_HEADING_SAMPLE)
+        self.assertEqual(data['article']['heading'], '标题甲',
+                         'H1 与 H2 不能被拼成一个假标题')
+        md = convert.render_generic(data)
+        self.assertTrue(md.startswith('# 标题甲\n'), md)
+        # H1 不进块流：不该再多出一个「## 标题甲」
+        self.assertEqual(md.count('标题甲'), 1, md)
+        self.assertIn('## 小节乙', md)
+
+    def test_bare_code_block_keeps_text(self):
+        md = convert.render_generic(convert.parse_generic(BARE_CODE_SAMPLE))
+        self.assertIn('```\nprint(1)\n```', md, '没有 <pre> 的裸 <code> 也不能丢字')
+
+    def test_article_list_is_tight(self):
+        html = ('<html><body><h1>列表页</h1><ul><li>一</li><li>二</li></ul>'
+                '<p>尾部。</p></body></html>')
+        md = convert.render_generic(convert.parse_generic(html))
+        self.assertIn('- 一\n- 二', md, '条目之间不该留空行（松列表会渲染成一堆 <p>）')
+
+    def test_frontmatter_is_opt_in_and_verifiable(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, 'x.html')
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(MULTI_HEADING_SAMPLE)
+            self.assertFalse(convert.process_file(path).startswith('---\n'),
+                             '默认不加 frontmatter（保持与历史产物等价）')
+            md = convert.process_file(path, frontmatter=True)
+            self.assertTrue(md.startswith('---\ntitle: 标题甲\n'), md[:40])
+            self.assertIn('source: x.html', md)
+
+    def test_no_backup_requires_apply(self):
+        with self.assertRaises(SystemExit) as ctx:
+            with contextlib.redirect_stderr(io.StringIO()):
+                convert.main(['x.html', '--no-backup'])
+        self.assertEqual(ctx.exception.code, 2, '--no-backup 单独使用应判用法错误')
+
+
 if __name__ == '__main__':
     unittest.main()

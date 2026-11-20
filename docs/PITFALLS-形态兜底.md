@@ -303,3 +303,27 @@
 再加三条来自代码审查的教训：**测试里「不该被算进去」的样本，必须先确认在正确实现下它确实会被算进去**（否则测的是空集）；**任何全局格式化都要保护不该动的子串**（URL）；**解析器的「当前条目」必须绑栈帧**（嵌套是常态，单例必丢行）。
 
 v2 再补四条：**先判容器再解文本**（`.mht` 是 MIME 容器，QP 转义会打断标签）；**广告归属看容器不看条目数**；**无语义标签的现代前端页面只能读 class，且具体 role 要判在噪声规则之前**；**兜底路径必须让白名单先行，优先级用早返回 + 「桩未被调用」的测试锁死，而不是写进注释**。
+
+---
+
+## 合并进主仓后的 review 修复记录
+
+合入 `html-md-toolkit` 之后又做了一轮 code review（实跑取证，不只看代码），确认并修掉 5 个缺陷，全部补了回归测试。
+
+| 编号 | 等级 | 问题 | 根因 | 修法 | 锁死用例 |
+|---|---|---|---|---|---|
+| R1 | P0 | 文章标题被拼成一串：`<h1>标题甲</h1>…<h2>小节乙</h2>` 输出 `# 标题甲小节乙`，且正文再重复一个 `## 标题甲` | `result()` 用 `''.join(self.heading)` 把所有标题文本拼接；H1 还作为 level=1 的块进入块流（渲染时被 clamp 成 `##`） | 标题收集改存 `(level, text)`，`_doc_title()` 取首个 H1；`level > 1` 才进块流 | `test_doc_title_is_first_h1_not_concatenation` |
+| R2 | P1 | 没有 `<pre>` 包裹的裸 `<code>` 内文字整块消失（输出只剩前后段落） | `_role()` 只把 `pre` 认成 `art_code`，`code` 没父级时无 role，文本落到「无归属」被丢 | `code` 且当前不在 code 帧、不在 `art_para` 帧内时也认 `art_code` | `test_bare_code_block_keeps_text` |
+| R3 | P1 | 成品没有 YAML 头，仓库自带的 `md_verify.py --strict` 必然判「无 frontmatter」不通过（两个工具互相不兼容） | 转换器只输出正文，归档约定要求 frontmatter，两边都没明说 | 新增 `--frontmatter` 输出 `title` / `source`（引号与特殊字符做 YAML 转义）；README / SOP 写明归档必须加 | `test_frontmatter_is_opt_in_and_verifiable` + 实测 `md_verify --strict` 退出码 0 |
+| R4 | P2 | 文章列表每项之间多一个空行 → CommonMark 视为「松列表」，渲染成一堆 `<p>` | 渲染循环 `lines += [marker + item, '']` | 条目连续输出，列表结束后空一行 | `test_article_list_is_tight` |
+| R5 | P2 | `--no-backup` 不带 `--apply` 时被静默忽略，使用者以为关了备份 | 缺参数互斥校验 | 判用法错误，退出码 2（对齐 argparse 惯例） | `test_no_backup_requires_apply` |
+
+批量脚本（分支 D）另修 3 个：
+
+| 编号 | 等级 | 问题 | 修法 | 锁死用例 |
+|---|---|---|---|---|
+| P1 | P1 | `-Log` 在「全部已是最新」早退分支之前就 `exit 0`，**增量复跑永远不写日志** | 抽出 `Write-RunLog()`，两条成功路径都调用；补 `exit 0` 避免调用方读到残留 `$LASTEXITCODE` | `test_log_written_on_incremental_skip` |
+| P2 | P1 | 源路径不存在时 `Get-ChildItem` 抛 `Cannot find path` 堆栈，不是可读报错 | 收集前先 `Test-Path`，分支内 `-ErrorAction Stop` + `try/catch` 给中文报错并 exit 1 | `test_missing_source_fails_friendly` |
+| P3 | P3 | 横幅写的还是 `html2md`，与文件名不一致 | 改成 `html2md_batch` | 目视 |
+
+**这轮教训**：前一轮 82 条测试全绿，仍漏掉 R1/R2 —— 因为**夹具只有单个标题、只有带 `<pre>` 的代码块**，实现的假设没被挑战。夹具要覆盖「同一功能的第二种形态」，而不是把已经跑通的那一种再测一遍。

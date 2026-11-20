@@ -31,7 +31,7 @@ python 脚本/wechat_picture_page.py "https://mp.weixin.qq.com/s/<id>" -o 笔记
 
 # 分支 C：版式固定、噪声极多的单页（白名单优先 + 多形态兜底）
 python 脚本/convert.py 页面.html --check      # 只读预检
-python 脚本/convert.py 页面.html --apply      # 写盘，已存在先备份 .md.bak
+python 脚本/convert.py 页面.html --apply --frontmatter   # 写盘 + YAML 头（归档用）
 
 # 分支 D：整棵目录 / 通配符批量（需要 pandoc）
 .\脚本\html2md_batch.ps1 -OutDir md_output -Incremental
@@ -55,6 +55,7 @@ Python 3.10+（实测 3.13），分支 A 需要 `beautifulsoup4`、`markdownify`
 - 输出 md 一律 UTF-8 **无 BOM**、LF，frontmatter 才能被常见笔记软件正确解析。
 - 图片只作为转录素材：**转录完成后连同 md 里的 `![]()` 行一起删除**，正文只留一句来源说明；确需保留插图时才落到 `assets/<md 名>/NN.jpg` 并用相对路径引用，任何情况都不写远端 CDN 图（需 Referer，且会失效）。
 - 对比卡不用 Markdown 表格（CommonMark 不渲染表格），改成成对的分组列表。
+- 归档前必过 `md_verify.py --strict`；它要求 YAML 头，所以分支 C 归档时加 `--frontmatter`，分支 D 的产物需另行补头（或先当草稿）。
 
 ## 维护
 

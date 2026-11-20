@@ -64,18 +64,35 @@ $cwd = (Get-Location).Path
 
 # ── 2. 收集源文件 ──────────────────────────────────────────────
 $cwdTrim = $cwd.TrimEnd('\')
+if (-not (Test-Path -Path $Source)) {
+    Write-Host "`n✖ 源路径不存在：$Source" -ForegroundColor Red
+    Write-Host "  支持 目录 / 单文件 / 通配符（如 `"docs\*.html`"）`n" -ForegroundColor DarkGray
+    exit 1
+}
 $item = @(Get-Item -Path $Source -ErrorAction SilentlyContinue)[0]
 
 if ($item -and $item.PSIsContainer) {
     # 目录源：递归收集
-    $files = Get-ChildItem -Path $item.FullName -Recurse -File -Include *.html, *.htm
+    try {
+        $files = Get-ChildItem -Path $item.FullName -Recurse -File -Include *.html, *.htm -ErrorAction Stop
+    }
+    catch {
+        Write-Host "`n✖ 读取目录失败：$Source`n  $($_.Exception.Message)`n" -ForegroundColor Red
+        exit 1
+    }
     $srcFull = $item.FullName.TrimEnd('\')
     # 基准目录：源在 cwd 之内 → 相对 cwd（完整镜像）；源在 cwd 之外 → 相对其父目录（保留源目录自身名字）
     $base = if ($srcFull -eq $cwdTrim -or $srcFull.StartsWith($cwdTrim + '\')) { $cwdTrim } else { Split-Path $srcFull -Parent }
 }
 else {
     # 通配符 / 单文件
-    $files = Get-ChildItem -Path $Source -File | Where-Object { $_.Name -match '\.html?$' }
+    try {
+        $files = Get-ChildItem -Path $Source -File -ErrorAction Stop | Where-Object { $_.Name -match '\.html?$' }
+    }
+    catch {
+        Write-Host "`n✖ 读取源失败：$Source`n  $($_.Exception.Message)`n" -ForegroundColor Red
+        exit 1
+    }
     $filesArr = @($files)
     $first = if ($filesArr.Count) { $filesArr[0].FullName } else { $cwdTrim }
     $base = if ($first.StartsWith($cwdTrim + '\')) { $cwdTrim } else { Split-Path $first -Parent }
@@ -127,8 +144,18 @@ $throttle = if ($Throttle -gt 0) { $Throttle } else { [Environment]::ProcessorCo
 $pandocPath = $pandoc.Source
 $isQuiet = [bool]$Quiet
 
+# 可选：追加运行日志（以下两条成功路径都会调用，增量复跑不再漏日志）
+function Write-RunLog {
+    param([int]$Ok, [int]$Fail, [double]$Seconds)
+    if (-not $Log) { return }
+    $logPath = if ([System.IO.Path]::IsPathRooted($Log)) { $Log } else { Join-Path $cwd $Log }
+    $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $line = "[$stamp] Source=$Source 找到=$($files.Count) 待转换=$($todo.Count) 跳过=$($skipped.Count) 成功=$Ok 失败=$Fail 耗时=$($Seconds.ToString('0.00'))s 输出=$outRoot"
+    Add-Content -Path $logPath -Value $line -Encoding utf8
+}
+
 Write-Host "`n═══════════════════════════════════════════════════" -ForegroundColor Cyan
-Write-Host "  html2md  ·  找到 $($files.Count) 个 html" -ForegroundColor Cyan
+Write-Host "  html2md_batch  ·  找到 $($files.Count) 个 html" -ForegroundColor Cyan
 if ($Incremental) { Write-Host "  待转换 $($todo.Count) 个，跳过 $($skipped.Count) 个（已是最新）" -ForegroundColor Cyan }
 else { Write-Host "  待转换 $($todo.Count) 个" -ForegroundColor Cyan }
 Write-Host "  并行度 $throttle  ·  输出 → $outRoot\" -ForegroundColor Cyan
@@ -136,6 +163,8 @@ Write-Host "══════════════════════�
 
 if ($todo.Count -eq 0) {
     Write-Host "✔ 全部已是最新，无需转换。`n" -ForegroundColor Green
+    $sw.Stop()
+    Write-RunLog -Ok 0 -Fail 0 -Seconds $sw.Elapsed.TotalSeconds
     exit 0
 }
 
@@ -156,13 +185,7 @@ $fail = @($results | Where-Object { -not $_.Ok }).Count
 $sw.Stop()
 $elapsed = $sw.Elapsed
 
-# 可选：追加运行日志
-if ($Log) {
-    $logPath = if ([System.IO.Path]::IsPathRooted($Log)) { $Log } else { Join-Path $cwd $Log }
-    $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $line = "[$stamp] Source=$Source 找到=$($files.Count) 待转换=$($todo.Count) 跳过=$($skipped.Count) 成功=$ok 失败=$fail 耗时=$($elapsed.TotalSeconds.ToString('0.00'))s 输出=$outRoot"
-    Add-Content -Path $logPath -Value $line -Encoding utf8
-}
+Write-RunLog -Ok $ok -Fail $fail -Seconds $elapsed.TotalSeconds
 
 # ── 5. 汇总 ────────────────────────────────────────────────────
 Write-Host "`n─────────────────────────────────────────────────────" -ForegroundColor Cyan
@@ -172,3 +195,5 @@ Write-Host "  耗时 $($elapsed.TotalSeconds.ToString('0.00')) 秒 · 输出目�
 Write-Host "─────────────────────────────────────────────────────`n" -ForegroundColor Cyan
 
 if ($fail -gt 0) { exit 1 }
+# 显式 0：避免调用方读到上一次进程残留的 $LASTEXITCODE
+exit 0
