@@ -1,0 +1,67 @@
+#!/bin/sh
+# html-md-toolkit pre-commit gate.
+# Blocks: non-ASCII bytes in .ps1, BOM in .ps1, secrets files, private keys, big blobs.
+# Trailing CR in this file breaks hooks under Windows - keep LF (see .gitattributes).
+
+fail=0
+blocked_names=0
+big=0
+
+for f in $(git diff --cached --name-only --diff-filter=ACM); do
+  [ -f "$f" ] || continue
+
+  case "$f" in
+    */env/.env|.env|*secret*|*pass|*key|*secrets/*|*.runtime.json)
+      echo "BLOCKED  secret-like path: $f"
+      blocked_names=1
+      continue
+      ;;
+    *.zip|*.7z|*.iso|*.exe|*.msi|*.dll)
+      echo "BLOCKED  binary not allowed in repo: $f"
+      blocked_names=1
+      continue
+      ;;
+  esac
+
+  size=$(git cat-file -s ":0:$f" 2>/dev/null || echo 0)
+  if [ "$size" -gt 5242880 ]; then
+    echo "BLOCKED  file larger than 5 MB: $f ($size bytes)"
+    big=1
+    continue
+  fi
+
+  case "$f" in
+    *.ps1|*.psm1)
+      # any byte outside 0x01-0x7F means Chinese text or a UTF-8 BOM
+      nonascii=$(LC_ALL=C tr -d '\000-\177' < "$f" | wc -c | tr -d ' ')
+      if [ "$nonascii" -ne 0 ]; then
+        echo "BLOCKED  non-ASCII (or BOM) in $f: $nonascii byte(s)."
+        echo "         PowerShell 5.1 parses BOM-less UTF-8 as ANSI and eats quotes."
+        echo "         Keep code comments in English; put Chinese text in logs via pwsh."
+        fail=1
+      fi
+      ;;
+  esac
+done
+
+# crude private-key / token sniff on staged text files
+for f in $(git diff --cached --name-only --diff-filter=ACM); do
+  case "$f" in
+    *.md|*.json|*.ps1|*.sh|*.py|*.example|*.yml|*.yaml) ;;
+    *) continue ;;
+  esac
+  [ -f "$f" ] || continue
+  if grep -qE 'BEGIN (RSA|OPENSSH|EC|PRIVATE) PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}' "$f" 2>/dev/null; then
+    echo "BLOCKED  private key or token pattern in: $f"
+    fail=1
+  fi
+done
+
+if [ "$fail" -ne 0 ] || [ "$blocked_names" -ne 0 ] || [ "$big" -ne 0 ]; then
+  echo ""
+  echo "Commit rejected. See README (约定) for the rules."
+  echo "Bypass only if you are certain: git commit --no-verify"
+  exit 1
+fi
+
+exit 0

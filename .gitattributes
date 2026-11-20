@@ -1,0 +1,35 @@
+# Line-ending baseline for html-md-toolkit.
+# Rule: the INDEX stores LF; the working tree gets what this file says.
+# Requires: git config core.autocrlf false
+#
+# Never rely on autocrlf for these: mixed checkouts silently break scripts.
+
+* text=auto eol=lf
+
+# Windows runtime files must be CRLF on disk
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.json  text eol=crlf
+*.xml   text eol=crlf
+*.ini   text eol=crlf
+
+# Git hook scripts run under sh on Windows; CRLF makes them die with
+# "bad interpreter: /bin/sh^M". Keep them LF, always.
+*.sh    text eol=lf
+*.py    text eol=lf
+*.md    text eol=lf
+config/git-hooks/* text eol=lf
+
+# Binary: never diff, never normalize
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.pdf  binary
+*.zip  binary
+*.7z   binary
+*.exe  binary
+*.dll  binary
